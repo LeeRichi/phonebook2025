@@ -2,7 +2,23 @@ const express = require('express')
 const app = express()
 const morgan = require('morgan');
 const cors = require('cors')
+const mongoose = require('mongoose')
+require('dotenv').config()
+const Person = require('./models/person');
 
+const url = process.env.MONGODB_URL;
+console.log('connecting to', url)
+
+mongoose.set('strictQuery',false)
+mongoose.connect(url)
+  .then(result => {
+    console.log('connected to MongoDB')
+  })
+  .catch(error => {
+    console.log('error connecting to MongoDB:', error.message)
+  })
+
+app.use(express.static('dist'))
 app.use(cors())
 
 app.use(morgan('tiny'));
@@ -17,80 +33,118 @@ const unknownEndpoint = (request, response) => {
   response.status(404).send({ error: 'unknown endpoint' })
 }
 
-let persons = [
-    {
-      "id": "1",
-      "name": "Arto Hellas",
-      "number": "040-123456"
-    },
-    {
-      "id": "2",
-      "name": "Ada Lovelace",
-      "number": "39-44-5323523"
-    },
-    {
-      "id": "3",
-      "name": "Dan Abramov",
-      "number": "12-43-234345"
-    },
-    {
-      "id": "4",
-      "name": "Mary Poppendieck",
-      "number": "39-23-6423122"
-    }
-]
-
-app.get('/api/persons', (request, response) => {
-  response.json(persons);
+app.get('/api/persons', (request, response, next) => {
+	Person.find({}).then(persons => {
+		response.json(persons)
+	})
 });
 
-app.get('/api/persons/:id', (request, response) => {
+app.get('/api/persons/:id', (request, response, next) => {
   const id = request.params.id
-  const person = persons.find(person => person.id === id)
+	// const person = persons.find(person => person.id === id)
 
-  if (person) {
-    response.json(person)
-  } else {
-    response.status(404).end()
-  }
+	Person.findById(id)
+		.then(person =>
+		{
+			if (person) {
+				response.json(person)
+			} else {
+				response.status(404).end()
+			}
+		})
+		.catch(error => next(error))
+
+		// .catch(err =>
+		// {
+		// 	console.error("Error finding person:", err);
+    //   response.status(400).send({ error: 'malformatted id' })
+		// })
 })
 
-app.delete('/api/persons/:id', (req, res) =>
-{
-	const id = req.params.id
+app.delete('/api/persons/:id', (req, res, next) => {
+  const id = req.params.id;
 
-	persons = persons.filter(person => person.id != id)
-	res.status(204).end()
-})
+	Person.findByIdAndDelete(id)
+		.then(deletedPerson =>
+		{
+			console.log(deletedPerson)
+      if (!deletedPerson) {
+        return res.status(404).json({ error: "Person not found" });
+      }
+      res.status(204).json(`deleted ${deletedPerson.name} succesfully`);
+		})
+		.catch(error => next(error))
 
-app.get('/info', (request, response) => {
-  const count = persons.length;
+    // .catch(error => {
+    //   console.error("Error deleting person:", error);
+    //   res.status(500).json({ error: "Server error" });
+    // });
+});
+
+app.get('/info', async(request, response) => {
+	const count = await Person.countDocuments(); // ✅ Fetch count from MongoDB
   const currentTime = new Date().toLocaleString(); // Get the local time
   response.send(`<p>Phonebook has info for ${count} people</p><p>Current local time: ${currentTime}</p>`);
 });
 
-app.post('/api/persons', (req, res) =>
+app.post('/api/persons', (req, res, next) =>
 {
-	const new_person = req.body
+	const body = req.body
 
-	if (persons.find(person => person.name === new_person.name))
-	{
-		return res.status(400).json({ error: "Person already exists." });
-	}
-	if (!new_person.name || !new_person.number)
-	{
+	if (!body.name || !body.number) {
 		return res.status(400).json({ error: "The name or number is missing." });
 	}
-	new_person.id = Math.floor(Math.random() * 1000000);
 
-	persons = persons.concat(new_person)
+  const new_person = new Person({
+    name: body.name,
+    number: body.number,
+	})
 
-	res.status(201).json(new_person);
+	new_person.save().then(savedPerson => {
+    res.status(201).json(savedPerson)
+	})
+	.catch(error => next(error))
+})
+
+app.put('/api/persons/:id', (req, res, next) =>
+{
+	const id = req.params.id;
+
+	const updatedPerson =
+	{
+		name: req.body.name,
+		number: req.body.number,
+	}
+
+	Person.findByIdAndUpdate(id, updatedPerson, { new: true })
+		.then(updatedPerson =>
+		{
+			if (!updatedPerson) {
+        return res.status(404).json({ error: "Person not found" });
+      }
+			res.json(updatedPerson)
+		})
+		.catch(error => next(error))
 })
 
 app.use(unknownEndpoint)
 
-const PORT = process.env.PORT || 3001
+const errorHandler = (error, request, response, next) => {
+  console.error(error.message)
+
+  if (error.name === 'CastError') {
+    return response.status(400).send({ error: 'malformatted id' })
+  }
+
+  next(error)
+}
+
+// this has to be the last loaded middleware, also all the routes should be registered before this!
+app.use(errorHandler)
+
+const PORT = process.env.PORT
+
+console.log(PORT)
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
 })
